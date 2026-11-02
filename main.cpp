@@ -1,80 +1,68 @@
-#include <algorithm>
-#include <fstream>
+
+#include <condition_variable>
+#include <functional>
 #include <iostream>
-#include <iterator>
-#include <string>
+#include <mutex>
+#include <thread>
 
-void reverseFileContents(const std::string& inputFileName,
-                         const std::string& outputFileName)
+// Shared synchronization state for both counter threads.
+struct CounterSync {
+    std::mutex mutex;
+    std::condition_variable ready;
+    bool upFinished = false;
+};
+
+// Thread 1 counts upward from 0 through 20.
+void countUp(CounterSync& sync)
 {
-    std::ifstream inputFile(inputFileName);
+    std::cout << "Thread 1 (count up): ";
 
-    if (!inputFile.is_open())
-    {
-        std::cerr << "Error: Could not open "
-                  << inputFileName
-                  << " for reading."
-                  << std::endl;
-        return;
+    for (int value = 0; value <= 20; ++value) {
+        std::cout << value << (value < 20 ? " " : "\n");
     }
 
-    std::string fileContents(
-        (std::istreambuf_iterator<char>(inputFile)),
-        std::istreambuf_iterator<char>());
-
-    inputFile.close();
-
-    std::reverse(fileContents.begin(), fileContents.end());
-
-    std::ofstream outputFile(outputFileName);
-
-    if (!outputFile.is_open())
+    // Signal that the first counter has finished.
     {
-        std::cerr << "Error: Could not open "
-                  << outputFileName
-                  << " for writing."
-                  << std::endl;
-        return;
+        std::lock_guard<std::mutex> lock(sync.mutex);
+        sync.upFinished = true;
     }
 
-    outputFile << fileContents;
-    outputFile.close();
+    sync.ready.notify_one();
+}
 
-    std::cout << "Reversed file created successfully: "
-              << outputFileName
-              << std::endl;
+// Thread 2 waits for Thread 1, then counts down to 0.
+void countDown(CounterSync& sync)
+{
+    {
+        std::unique_lock<std::mutex> lock(sync.mutex);
+
+        // The predicate handles early notifications
+        // and unexpected wake-ups safely.
+        sync.ready.wait(lock, [&sync] {
+            return sync.upFinished;
+        });
+    }
+
+    std::cout << "Thread 2 (count down): ";
+
+    for (int value = 20; value >= 0; --value) {
+        std::cout << value << (value > 0 ? " " : "\n");
+    }
 }
 
 int main()
 {
-    const std::string originalFile = "CSC450_CT5_mod5.txt";
-    const std::string reversedFile = "CSC450-mod5-reverse.txt";
+    CounterSync sync;
 
-    std::string userInput;
+    // Start two worker threads.
+    std::thread first(countUp, std::ref(sync));
+    std::thread second(countDown, std::ref(sync));
 
-    std::cout << "Enter text to append to the file: ";
-    std::getline(std::cin, userInput);
+    // Wait for both threads before leaving main().
+    first.join();
+    second.join();
 
-    std::ofstream appendFile(originalFile, std::ios::app);
-
-    if (!appendFile.is_open())
-    {
-        std::cerr << "Error: Could not open "
-                  << originalFile
-                  << " for appending."
-                  << std::endl;
-
-        return 1;
-    }
-
-    appendFile << std::endl << userInput;
-    appendFile.close();
-
-    std::cout << "Input appended successfully to "
-              << originalFile
-              << std::endl;
-
-    reverseFileContents(originalFile, reversedFile);
+    std::cout << "Program finished successfully.\n";
 
     return 0;
 }
